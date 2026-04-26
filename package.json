@@ -1,0 +1,39 @@
+{
+  "name": "chainposts",
+  "version": "1.0.0",
+  "description": "A wallet-connected Web3 app for publishing short posts directly on-chain.",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "compile": "hardhat compile",
+    "node": "hardhat node --hostname 127.0.0.1",
+    "deploy": "hardhat run scripts/deploy.cjs --network localhost",
+    "test": "hardhat test"
+  },
+  "keywords": [
+    "web3",
+    "dapp",
+    "solidity",
+    "hardhat",
+    "react",
+    "ethers"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "ethers": "^6.16.0",
+    "lucide-react": "^1.11.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-ethers": "^3.0.8",
+    "@vitejs/plugin-react": "^6.0.1",
+    "hardhat": "^2.26.3",
+    "vite": "^8.0.10"
+  }
+}
