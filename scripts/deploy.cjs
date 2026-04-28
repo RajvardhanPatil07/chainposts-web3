@@ -17,6 +17,7 @@ async function main() {
     chainId,
     network: hre.network.name,
     abi: artifact.abi,
+    bytecode: artifact.bytecode,
   };
 
   const contractMetadataPath = path.join(

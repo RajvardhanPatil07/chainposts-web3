@@ -8,6 +8,7 @@ import {
   Network,
   Power,
   RefreshCw,
+  Rocket,
   Send,
   Sun,
   Wallet,
@@ -20,6 +21,8 @@ const FALLBACK_CHAIN_ID = 31337;
 const FALLBACK_RPC_URL = "http://127.0.0.1:8545";
 const LOGO_SRC = "/chainposts-logo.png";
 const HARDHAT_FUNDED_BALANCE_HEX = "0x21e19e0c9bab2400000";
+const CONTRACT_STORAGE_KEY = "chainposts-contracts-v1";
+const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1"]);
 
 function getContractAddress() {
   const address =
@@ -38,6 +41,47 @@ function getExpectedChainId() {
 
 function getRpcUrl() {
   return import.meta.env.VITE_RPC_URL || FALLBACK_RPC_URL;
+}
+
+function isLocalRpcUrl(rpcUrl) {
+  return /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/i.test(rpcUrl);
+}
+
+function shouldPreferWalletNetwork(expectedChainId, rpcUrl) {
+  if (typeof window === "undefined") return false;
+
+  return (
+    expectedChainId === FALLBACK_CHAIN_ID &&
+    isLocalRpcUrl(rpcUrl) &&
+    !LOCAL_HOSTNAMES.has(window.location.hostname)
+  );
+}
+
+function getStoredContracts() {
+  if (typeof window === "undefined") return {};
+
+  try {
+    return JSON.parse(window.localStorage.getItem(CONTRACT_STORAGE_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
+
+function getStoredContractAddress(chainId) {
+  if (!chainId) return "";
+  const address = getStoredContracts()[String(chainId)];
+  return ethers.isAddress(address) ? address : "";
+}
+
+function storeContractAddress(chainId, address) {
+  if (typeof window === "undefined" || !ethers.isAddress(address)) return;
+
+  const storedContracts = getStoredContracts();
+  storedContracts[String(chainId)] = address;
+  window.localStorage.setItem(
+    CONTRACT_STORAGE_KEY,
+    JSON.stringify(storedContracts)
+  );
 }
 
 function getInitialTheme() {
@@ -99,7 +143,7 @@ function collectErrorMessages(value, messages = []) {
 
   if (typeof value !== "object") return messages;
 
-  for (const key of ["shortMessage", "reason", "message"]) {
+  for (const key of ["shortMessage", "reason", "message", "details"]) {
     if (typeof value[key] === "string") {
       messages.push(value[key]);
     }
@@ -112,10 +156,14 @@ function collectErrorMessages(value, messages = []) {
   return messages;
 }
 
+function getCombinedErrorMessage(error) {
+  return collectErrorMessages(error).join(" ").toLowerCase();
+}
+
 function parseWalletError(error) {
   const messages = collectErrorMessages(error);
   const reason = messages.find(Boolean);
-  const combinedReason = messages.join(" ").toLowerCase();
+  const combinedReason = getCombinedErrorMessage(error);
 
   if (!reason) {
     return "Something went wrong. Please try again.";
@@ -138,45 +186,150 @@ function parseWalletError(error) {
     combinedReason.includes("exceeds the balance") ||
     combinedReason.includes("does not have enough funds")
   ) {
-    return "This wallet has no Hardhat test ETH. I tried to fund it automatically; refresh and try again if MetaMask has not caught up.";
+    return "This wallet has no ETH for gas on the connected network. Add test ETH or switch to a funded wallet network.";
+  }
+
+  if (
+    combinedReason.includes("nonce too high") ||
+    combinedReason.includes("nonce too low") ||
+    combinedReason.includes("nonce has already been used") ||
+    combinedReason.includes("nonce is too high") ||
+    combinedReason.includes("replacement transaction underpriced")
+  ) {
+    return "MetaMask has stale transaction history for this restarted local chain. Clear/reset MetaMask activity for this account, reconnect, and try again.";
+  }
+
+  if (
+    combinedReason.includes("failed to fetch") ||
+    combinedReason.includes("connection refused") ||
+    combinedReason.includes("could not detect network") ||
+    combinedReason.includes("network error") ||
+    combinedReason.includes("server response 0")
+  ) {
+    return "The local RPC is not reachable. If you are using Hardhat, start `npm run node`; otherwise connect a wallet network and deploy a contract from this page.";
+  }
+
+  if (combinedReason.includes("no chainposts contract found")) {
+    return reason;
   }
 
   if (
     combinedReason.includes("could not coalesce error") ||
     combinedReason.includes("internal json-rpc error")
   ) {
-    return "The wallet returned a low-level RPC error. Check that MetaMask is using http://127.0.0.1:8545 on chain 31337 and that the contract is deployed.";
+    return "The wallet returned a local-chain RPC error. Make sure the Hardhat node is still running, redeploy the contract after every node restart, and clear/reset MetaMask activity if the chain was restarted.";
   }
 
   return reason;
 }
 
+async function fundLocalAccount(browserProvider, rpcUrl, accountAddress) {
+  const mineBlock = async (provider) => {
+    try {
+      await provider.send("evm_mine", []);
+    } catch {
+      // Mining is only needed to nudge local-wallet balance refreshes.
+    }
+  };
+
+  const attempts = [
+    async () => {
+      await browserProvider.send("hardhat_setBalance", [
+        accountAddress,
+        HARDHAT_FUNDED_BALANCE_HEX,
+      ]);
+      await mineBlock(browserProvider);
+    },
+    async () => {
+      await browserProvider.send("anvil_setBalance", [
+        accountAddress,
+        HARDHAT_FUNDED_BALANCE_HEX,
+      ]);
+      await mineBlock(browserProvider);
+    },
+    async () => {
+      const localProvider = new ethers.JsonRpcProvider(rpcUrl);
+      await localProvider.send("hardhat_setBalance", [
+        accountAddress,
+        HARDHAT_FUNDED_BALANCE_HEX,
+      ]);
+      await mineBlock(localProvider);
+    },
+    async () => {
+      const localProvider = new ethers.JsonRpcProvider(rpcUrl);
+      await localProvider.send("anvil_setBalance", [
+        accountAddress,
+        HARDHAT_FUNDED_BALANCE_HEX,
+      ]);
+      await mineBlock(localProvider);
+    },
+  ];
+
+  let lastError;
+
+  for (const attempt of attempts) {
+    try {
+      await attempt();
+      return true;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  console.warn("Could not auto-fund local wallet account.", lastError);
+  return false;
+}
+
 export default function App() {
-  const contractAddress = useMemo(getContractAddress, []);
-  const expectedChainId = useMemo(getExpectedChainId, []);
+  const configuredContractAddress = useMemo(getContractAddress, []);
+  const configuredExpectedChainId = useMemo(getExpectedChainId, []);
   const rpcUrl = useMemo(getRpcUrl, []);
   const hasInjectedWallet = typeof window !== "undefined" && Boolean(window.ethereum);
+  const prefersWalletNetwork = useMemo(
+    () => shouldPreferWalletNetwork(configuredExpectedChainId, rpcUrl),
+    [configuredExpectedChainId, rpcUrl]
+  );
 
   const [theme, setTheme] = useState(getInitialTheme);
   const [account, setAccount] = useState("");
   const [chainId, setChainId] = useState(null);
+  const [walletContractAddress, setWalletContractAddress] = useState("");
   const [posts, setPosts] = useState([]);
   const [totalPosts, setTotalPosts] = useState(0);
   const [draft, setDraft] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
+  const [isDeploying, setIsDeploying] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
+  const expectedChainId = prefersWalletNetwork
+    ? chainId || configuredExpectedChainId
+    : configuredExpectedChainId;
+  const contractAddress =
+    walletContractAddress ||
+    (prefersWalletNetwork ? "" : configuredContractAddress);
+  const hasContractBytecode =
+    typeof chainPostsMetadata.bytecode === "string" &&
+    chainPostsMetadata.bytecode.startsWith("0x") &&
+    chainPostsMetadata.bytecode.length > 2;
   const draftBytes = getPostLength(draft);
-  const isWrongChain = Boolean(chainId) && chainId !== expectedChainId;
+  const isWrongChain =
+    !prefersWalletNetwork && Boolean(chainId) && chainId !== expectedChainId;
+  const canDeploy =
+    Boolean(account) &&
+    !isWrongChain &&
+    hasContractBytecode &&
+    !isDeploying &&
+    !isPublishing;
   const canPublish =
     Boolean(account) &&
     Boolean(contractAddress) &&
     !isWrongChain &&
     draft.trim().length > 0 &&
     draftBytes <= MAX_POST_BYTES &&
+    !isDeploying &&
     !isPublishing;
 
   const getBrowserProvider = useCallback(async () => {
@@ -188,7 +341,11 @@ export default function App() {
   }, []);
 
   const getReadProvider = useCallback(() => {
-    if (rpcUrl) {
+    if (window.ethereum && (account || prefersWalletNetwork)) {
+      return new ethers.BrowserProvider(window.ethereum);
+    }
+
+    if (!prefersWalletNetwork && rpcUrl) {
       return new ethers.JsonRpcProvider(rpcUrl);
     }
 
@@ -197,7 +354,7 @@ export default function App() {
     }
 
     throw new Error("No wallet or RPC provider found.");
-  }, [rpcUrl]);
+  }, [account, prefersWalletNetwork, rpcUrl]);
 
   const refreshPosts = useCallback(async () => {
     if (!contractAddress) {
@@ -211,6 +368,13 @@ export default function App() {
 
     try {
       const readProvider = getReadProvider();
+      const contractCode = await readProvider.getCode(contractAddress);
+      if (contractCode === "0x") {
+        throw new Error(
+          `No ChainPosts contract found at ${formatAddress(contractAddress)} on this network. Deploy a fresh contract from this page or reconnect to the right network.`
+        );
+      }
+
       const contract = new ethers.Contract(
         contractAddress,
         chainPostsMetadata.abi,
@@ -314,6 +478,70 @@ export default function App() {
     }
   }, [expectedChainId, rpcUrl, syncWalletState]);
 
+  const deployContract = useCallback(async () => {
+    if (!canDeploy) return;
+
+    setIsDeploying(true);
+    setError("");
+    setNotice("Confirm the contract deployment in your wallet.");
+
+    try {
+      const provider = await getBrowserProvider();
+      const signer = await provider.getSigner();
+      const signerAddress = await signer.getAddress();
+      const network = await provider.getNetwork();
+      const walletChainId = Number(network.chainId);
+
+      if (!prefersWalletNetwork && walletChainId !== expectedChainId) {
+        throw new Error(`Switch to chain ${expectedChainId} before deploying.`);
+      }
+
+      const balance = await provider.getBalance(signerAddress);
+      if (balance === 0n && walletChainId === FALLBACK_CHAIN_ID) {
+        setNotice("Adding Hardhat Local ETH to this wallet...");
+        const didFundAccount = await fundLocalAccount(
+          provider,
+          rpcUrl,
+          signerAddress
+        );
+
+        if (!didFundAccount) {
+          throw new Error(
+            `This wallet has no ETH on Hardhat Local. Import a funded Hardhat account or send local ETH to ${formatAddress(signerAddress)} before deploying.`
+          );
+        }
+      }
+
+      const factory = new ethers.ContractFactory(
+        chainPostsMetadata.abi,
+        chainPostsMetadata.bytecode,
+        signer
+      );
+      const contract = await factory.deploy();
+
+      setNotice("Deployment submitted. Waiting for confirmation...");
+      await contract.waitForDeployment();
+
+      const deployedAddress = await contract.getAddress();
+      storeContractAddress(walletChainId, deployedAddress);
+      setWalletContractAddress(deployedAddress);
+      setPosts([]);
+      setTotalPosts(0);
+      setNotice(`Contract deployed at ${formatAddress(deployedAddress)}.`);
+    } catch (err) {
+      setError(parseWalletError(err));
+      setNotice("");
+    } finally {
+      setIsDeploying(false);
+    }
+  }, [
+    canDeploy,
+    expectedChainId,
+    getBrowserProvider,
+    prefersWalletNetwork,
+    rpcUrl,
+  ]);
+
   const publishPost = useCallback(async () => {
     const trimmedPost = draft.trim();
 
@@ -336,18 +564,26 @@ export default function App() {
       const contractCode = await provider.getCode(contractAddress);
       if (contractCode === "0x") {
         throw new Error(
-          `No ChainPosts contract found at ${formatAddress(contractAddress)} on this wallet network. Use RPC ${rpcUrl} and redeploy if needed.`
+          `No ChainPosts contract found at ${formatAddress(contractAddress)} on this wallet network. Deploy a fresh contract from this page or reconnect to the right network.`
         );
       }
 
       const balance = await provider.getBalance(signerAddress);
       if (balance === 0n && expectedChainId === FALLBACK_CHAIN_ID) {
-        const localProvider = new ethers.JsonRpcProvider(rpcUrl);
-        await localProvider.send("hardhat_setBalance", [
-          signerAddress,
-          HARDHAT_FUNDED_BALANCE_HEX,
-        ]);
-        setNotice("Added local Hardhat test ETH. Confirm the transaction in your wallet.");
+        setNotice("Adding Hardhat Local ETH to this wallet...");
+        const didFundAccount = await fundLocalAccount(
+          provider,
+          rpcUrl,
+          signerAddress
+        );
+
+        if (!didFundAccount) {
+          throw new Error(
+            `This wallet has no ETH on Hardhat Local. Testnet ETH on Sepolia or another network cannot pay gas on chain ${expectedChainId}. Import a funded Hardhat account or send local ETH to ${formatAddress(signerAddress)} before publishing.`
+          );
+        }
+
+        setNotice("Added Hardhat Local ETH. Confirm the transaction in your wallet.");
       }
 
       const contract = new ethers.Contract(
@@ -394,6 +630,10 @@ export default function App() {
     document.documentElement.dataset.theme = theme;
     window.localStorage.setItem("chainposts-theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    setWalletContractAddress(getStoredContractAddress(chainId));
+  }, [chainId]);
 
   useEffect(() => {
     syncWalletState();
@@ -500,7 +740,21 @@ export default function App() {
           {!contractAddress && (
             <div className="inline-alert warning" role="status">
               <AlertCircle size={18} aria-hidden="true" />
-              <span>Contract address is not configured.</span>
+              <span>
+                {prefersWalletNetwork
+                  ? "Deploy a ChainPosts contract on the connected wallet network first."
+                  : "Contract address is not configured."}
+              </span>
+              {account && hasContractBytecode && (
+                <button
+                  type="button"
+                  onClick={deployContract}
+                  disabled={!canDeploy}
+                >
+                  <Rocket size={16} aria-hidden="true" />
+                  {isDeploying ? "Deploying" : "Deploy"}
+                </button>
+              )}
             </div>
           )}
 
@@ -583,7 +837,7 @@ export default function App() {
                 title="Copy contract address"
               >
                 <Clipboard size={15} aria-hidden="true" />
-                {contractAddress ? formatAddress(contractAddress) : "Missing"}
+                {contractAddress ? formatAddress(contractAddress) : "Deploy first"}
               </button>
             </div>
           </div>

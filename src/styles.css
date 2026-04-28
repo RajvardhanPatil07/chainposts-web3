@@ -352,6 +352,9 @@ h2 {
 }
 
 .inline-alert button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 0 12px;
   color: var(--warning-text);
   background: rgba(255, 229, 172, 0.7);

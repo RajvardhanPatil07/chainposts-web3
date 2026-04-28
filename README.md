@@ -119,9 +119,9 @@ public/               Static assets including app branding
 <details>
   <summary><strong>Live deployment note</strong></summary>
 
-The current Vercel deployment is available at [chainposts-web3.vercel.app](https://chainposts-web3.vercel.app/), but the app is still configured around a local Hardhat RPC by default. That means the hosted UI is live, while real posting still expects a reachable blockchain endpoint and matching deployed contract metadata.
+The current Vercel deployment is available at [chainposts-web3.vercel.app](https://chainposts-web3.vercel.app/). When the hosted app detects that the bundled contract metadata points to local Hardhat, it lets the connected wallet deploy a fresh ChainPosts contract on the active wallet network instead of trying to use `127.0.0.1` from production.
 
-For a fully public version, the next step is deploying the contract to a public testnet and updating:
+For a shared public feed, deploy one contract to a public testnet and update:
 
 - `VITE_POSTS_CONTRACT_ADDRESS`
 - `VITE_EXPECTED_CHAIN_ID`
