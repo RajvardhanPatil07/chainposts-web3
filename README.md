@@ -156,7 +156,3 @@ The frontend also includes friendlier handling for common wallet errors such as:
 - local blockchain development with Hardhat
 - handling chain IDs, RPC endpoints, and deployment metadata
 - shipping a Web3 frontend to production
-
-## Additional Documentation
-
-- Tenure report: [WEB3_CLUB_TENURE_REPORT.md](WEB3_CLUB_TENURE_REPORT.md)
