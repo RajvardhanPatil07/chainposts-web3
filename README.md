@@ -13,7 +13,6 @@
   ·
   <a href="#run-locally">Run Locally</a>
   ·
-  <a href="WEB3_CLUB_TENURE_REPORT.md">Club Report</a>
 </p>
 
 <p align="center">
