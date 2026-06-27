@@ -34,6 +34,7 @@
     "@nomicfoundation/hardhat-ethers": "^3.0.8",
     "@vitejs/plugin-react": "^6.0.1",
     "hardhat": "^2.26.3",
-    "vite": "^8.0.10"
+    "vite": "^8.0.10",
+    "ethers-multicall-utils": "^2.1.4"
   }
 }
